@@ -37,22 +37,27 @@ class DataGenerator(object):
             self.dim_input = np.prod(self.img_size)
             self.dim_output = self.num_classes
             # data that is pre-resized using PIL with lanczos filter
-            data_folder = config.get('data_folder', './data/omniglot_resized')
+            data_folder = config.get('data_folder', './data/mnist_10')
 
-            character_folders = [os.path.join(data_folder, family, character) \
-                for family in os.listdir(data_folder) \
-                if os.path.isdir(os.path.join(data_folder, family)) \
-                for character in os.listdir(os.path.join(data_folder, family))]
+            character_folders = [os.path.join(data_folder, character) \
+                #for family in os.listdir(data_folder) \
+                #if os.path.isdir(os.path.join(data_folder, family)) \
+                for character in os.listdir(os.path.join(data_folder)) \
+                if os.path.isdir(os.path.join(data_folder, character))]
             random.seed(1)
             random.shuffle(character_folders)
-            num_val = 100
+            num_val = 0 #100
             num_train = config.get('num_train', 1200) - num_val
+            #if num_val > 0:
             self.metatrain_character_folders = character_folders[:num_train]
             if FLAGS.test_set:
                 self.metaval_character_folders = character_folders[num_train+num_val:]
             else:
                 self.metaval_character_folders = character_folders[num_train:num_train+num_val]
-            self.rotations = config.get('rotations', [0, 90, 180, 270])
+            #else:
+            #    self.metaval_character_folders = []
+            self.rotations = config.get('rotations', [0]) #, 90, 180, 270])
+        
         elif FLAGS.datasource == 'miniimagenet':
             self.num_classes = config.get('num_classes', FLAGS.num_classes)
             self.img_size = config.get('img_size', (84, 84))
@@ -83,7 +88,7 @@ class DataGenerator(object):
         if train:
             folders = self.metatrain_character_folders
             # number of tasks, not number of meta-iterations. (divide by metabatch size to measure)
-            num_total_batches = 200000
+            num_total_batches = 100 #200000
         else:
             folders = self.metaval_character_folders
             num_total_batches = 600
@@ -92,6 +97,8 @@ class DataGenerator(object):
         print('Generating filenames')
         all_filenames = []
         for _ in range(num_total_batches):
+            #print(folders)
+            #print('>>>',self.num_classes)
             sampled_character_folders = random.sample(folders, self.num_classes)
             random.shuffle(sampled_character_folders)
             labels_and_images = get_images(sampled_character_folders, range(self.num_classes), nb_samples=self.num_samples_per_class, shuffle=False)
@@ -111,7 +118,7 @@ class DataGenerator(object):
             image = tf.reshape(image, [self.dim_input])
             image = tf.cast(image, tf.float32) / 255.0
         else:
-            image = tf.image.decode_png(image_file)
+            image = tf.image.decode_jpeg(image_file)
             image.set_shape((self.img_size[0],self.img_size[1],1))
             image = tf.reshape(image, [self.dim_input])
             image = tf.cast(image, tf.float32) / 255.0
