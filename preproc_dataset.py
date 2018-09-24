@@ -2,17 +2,25 @@ import os
 import numpy as np
 from PIL import Image
 
+dataset = 'miniimagenet'
+train_count = 10 # train samples per class
+val_count = 590 # val samples per class
+
 mnist_dir = '/home/prithvi/dsets/MNIST/trainingSet/'
 omniglot_dir = '/home/prithvi/dsets/Omniglot/train'
 miniimagenet_dir = '/home/prithvi/dsets/miniimagenet/train'
 
-# Set params
-data_dir = mnist_dir
 save_dir = './data'
 
-train_count = 10 # train samples per class
-val_count = 3500 # val samples per class
-size = (28,28)
+if dataset == 'mnist':
+    data_dir = mnist_dir
+    size = (28,28)
+elif dataset == 'omniglot':
+    data_dir = omniglot_dir
+    size = (28,28)
+elif dataset == 'miniimagenet':
+    data_dir = miniimagenet_dir
+    size = (84,84)
 
 if __name__ == '__main__':
     train_dir = os.path.join(save_dir,'metatrain')

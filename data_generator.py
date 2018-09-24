@@ -24,7 +24,11 @@ class DataGenerator(object):
         self.batch_size = batch_size
         self.num_samples_per_class = num_samples_per_class
         #self.num_classes = 1  # by default 1 (only relevant for classification problems)
-
+        self.meta_batch_size = FLAGS.meta_batch_size
+        self.meta_iters = FLAGS.metatrain_iterations
+        #self.target_iters = 50
+        self.target_iters = FLAGS.target_maml_iterations
+    
         self.num_classes = config.get('num_classes', FLAGS.num_classes)
         self.img_size = config.get('img_size', (FLAGS.img_size, FLAGS.img_size))
         self.dim_input = np.prod(self.img_size)*3
@@ -50,12 +54,12 @@ class DataGenerator(object):
         self.metaval_character_folders = self.metatrain_character_folders #metaval_folders
         self.rotations = config.get('rotations', [0])
 
-    def make_data_tensor(self, train=True, data_folder=None, num_total_batches=-1):
-        if train:
+    def make_data_tensor(self, train=True, data_folder=None, num_total_batches=-1, target=False):
+        if True: #train:
             folders = self.metatrain_character_folders
             # number of tasks, not number of meta-iterations. (divide by metabatch size to measure)
             if num_total_batches == -1:
-                num_total_batches = 1000 #200000
+                num_total_batches = 10+self.meta_iters*self.meta_batch_size #200000
         else:
             folders = self.metaval_character_folders
             num_total_batches = 600
@@ -63,10 +67,12 @@ class DataGenerator(object):
         # make list of files
         print('Generating filenames')
         all_filenames = []
-        for _ in range(num_total_batches):
-            #sampled_character_folders = random.sample(folders, self.num_classes)
-            #random.shuffle(sampled_character_folders)
-            sampled_character_folders = folders
+        for bt in range(num_total_batches):
+            
+            sampled_character_folders = [f for f in folders]
+            if bt < (self.meta_iters-self.target_iters)*self.meta_batch_size:
+                random.shuffle(sampled_character_folders)
+            
             labels_and_images = get_images(sampled_character_folders, range(self.num_classes), nb_samples=self.num_samples_per_class, shuffle=False)
             # make sure the above isn't randomized order
             labels = [li[0] for li in labels_and_images]
@@ -96,15 +102,15 @@ class DataGenerator(object):
                 capacity=min_queue_examples + 3 * batch_image_size,
                 )
         all_image_batches, all_label_batches = [], []
-        print('Manipulating image data to be right shape')
+        print('Manipulating image data to be right shape:',images.get_shape().as_list())
         for i in range(self.batch_size):
             image_batch = images[i*examples_per_batch:(i+1)*examples_per_batch]
-
+            
             label_batch = tf.convert_to_tensor(labels)
             new_list, new_label_list = [], []
             for k in range(self.num_samples_per_class):
                 class_idxs = tf.range(0, self.num_classes)
-                class_idxs = tf.random_shuffle(class_idxs)
+                #class_idxs = tf.random_shuffle(class_idxs)
 
                 true_idxs = class_idxs*self.num_samples_per_class + k
                 new_list.append(tf.gather(image_batch,true_idxs))
@@ -123,6 +129,7 @@ class DataGenerator(object):
         train_dir = './data/metatrain'
         val_dir = './data/metaval'
         channels = 3
+        unit = np.diag(np.ones(len(class_folders)))
         def read_img(path):
             im = cv2.cvtColor(cv2.resize(cv2.imread(path),self.img_size),cv2.COLOR_BGR2RGB)
             return np.float32(im).flatten() / 255.0
@@ -131,10 +138,10 @@ class DataGenerator(object):
             cls = os.path.split(cls)[-1]
             cls_train = os.path.join(train_dir,cls)
             samples = list(map(read_img,[os.path.join(cls_train,s) for s in os.listdir(cls_train)]))
-            ds.extend(list(zip(samples,[i]*len(samples))))
+            ds.extend(list(zip(samples,[unit[i]]*len(samples))))
             cls_val = os.path.join(val_dir,cls)
             samples = list(map(read_img,[os.path.join(cls_val,s) for s in os.listdir(cls_val)]))
-            vds.extend(list(zip(samples,[i]*len(samples))))
+            vds.extend(list(zip(samples,[unit[i]]*len(samples))))
         np.random.shuffle(ds)
         np.random.shuffle(vds)
         x,y = zip(*ds)

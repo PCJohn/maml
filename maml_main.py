@@ -25,6 +25,7 @@ Usage Instructions:
 """
 import os
 import csv
+import sys
 import numpy as np
 import pickle
 import random
@@ -48,8 +49,20 @@ flags.DEFINE_integer('metatrain_iterations', 1000, 'number of metatraining itera
 flags.DEFINE_integer('meta_batch_size', 4, 'number of tasks sampled per meta-update')
 flags.DEFINE_float('meta_lr', 0.001, 'the base learning rate of the generator')
 flags.DEFINE_integer('update_batch_size', 1, 'number of examples used for inner gradient update (K for K-shot learning).')
+
 flags.DEFINE_float('update_lr', 1e-3, 'step size alpha for inner gradient update.') # 0.1 for omniglot
-flags.DEFINE_integer('num_updates', 5, 'number of inner gradient updates during training.')
+flags.DEFINE_float('target_task_lr',1e-4,'step size for target task')
+
+flags.DEFINE_integer('num_updates', 1, 'number of inner gradient updates during training.')
+flags.DEFINE_integer('target_maml_iterations',50,'number of MAML iterations at the end which use the target task class ordering')
+flags.DEFINE_integer('target_task_iterations',1,'number of iterations on the target task after MAML pretraining')
+
+flags.DEFINE_string('opt_mode','maml','mode for optimization: maml or plain sgd') # 'maml' or 'sgd'
+
+## SGD options
+flags.DEFINE_integer('sgd_bz',100,'batch size for plain sgd')
+flags.DEFINE_integer('sgd_iterations',1000,'number of iterations for plain sgd')
+flags.DEFINE_float('sgd_lr',1e-3,'learning rate for plain sgd')
 
 ## Model options
 flags.DEFINE_string('norm', 'None', 'batch_norm, layer_norm, or None')
@@ -122,7 +135,7 @@ def train(model, saver, sess, exp_string, data_generator, resume_itr=0):
 
     saver.save(sess, FLAGS.logdir + '/' + exp_string +  '/model' + str(itr))
 
-def main():
+def main(class_folders):
     test_num_updates = 1
 
     if FLAGS.metatrain_iterations == 0:
@@ -130,7 +143,7 @@ def main():
         return
     
     # list of class folders -- TODO: pass from experiment script
-    class_folders = sorted(['./data/metatrain/'+c for c in os.listdir('./data/metatrain')])
+    #class_folders = sorted(['./data/metatrain/'+c for c in os.listdir('./data/metatrain')])
        
     data_generator = DataGenerator(FLAGS.update_batch_size*2+8, FLAGS.meta_batch_size, class_folders)
     dim_output = data_generator.dim_output
@@ -145,6 +158,8 @@ def main():
     labela = tf.slice(label_tensor, [0,0,0], [-1,num_classes*FLAGS.update_batch_size, -1])
     labelb = tf.slice(label_tensor, [0,num_classes*FLAGS.update_batch_size, 0], [-1,-1,-1])
     input_tensors = {'inputa': inputa, 'inputb': inputb, 'labela': labela, 'labelb': labelb}
+
+    print('>>>',inputa.get_shape().as_list(),'--',inputb.get_shape().as_list())
 
     model = MAML(dim_input, dim_output, test_num_updates=test_num_updates)
     model.construct_model(input_tensors=input_tensors, prefix='metatrain_')
@@ -194,12 +209,8 @@ def main():
             print("Restoring model weights from " + model_file)
             saver.restore(sess, model_file)
 
-    opt = 'maml'
+    opt = FLAGS.opt_mode #'maml'
     
-    if opt == 'maml':
-        print('Pretraining with MAML...')
-        train(model, saver, sess, exp_string, data_generator, resume_itr)
-
     # Plain SGD on target task
     print('Loading target task...')
     x,y,vx,vy = data_generator.load_target_task(class_folders)
@@ -214,23 +225,49 @@ def main():
         plt.title('Val '+str(vy[i]))
         plt.show()
     '''
-    if opt == 'sgd':
+    
+    if opt == 'maml':
+        print('Pretraining with MAML...')
+        train(model, saver, sess, exp_string, data_generator, resume_itr)
+        model.setup_maml_pred()
+        #model.weights = model.fast_weights
+        py,pvy = sess.run([model.maml_pred_x,model.maml_pred_vx],feed_dict={model.x_ph:x, model.y_ph:y, model.vx_ph:vx})
+        py,pvy = py.argmax(axis=1),pvy.argmax(axis=1)
+        #pvy = sess.run(model.maml_pred_vx,feed_dict={model.x_ph:vx}).argmax(axis=1)
+    elif opt == 'sgd':
+        #model.setup_final_pred(mode='sgd')
         print('Finetuning on the target task')
-        bz = 10
-        niter = 300
+        bz = 100
+        niter = 1000
         for i in range(niter):
             bi = np.random.randint(0,x.shape[0],bz)
             loss,_ = sess.run([model.sgd_loss,model.sgd_step],feed_dict={model.x_ph:x[bi],model.y_ph:y[bi]})
-            print('Iteration '+str(i)+' - '+str(loss))
+            if (i+1)%100 == 0:
+                print('Iteration '+str(i)+' - '+str(np.mean(loss)))
+        py = sess.run(model.sgd_pred,feed_dict={model.x_ph:x, model.y_ph:y}).argmax(axis=1)
+        pvy = sess.run(model.sgd_pred,feed_dict={model.x_ph:vx}).argmax(axis=1)
     
-    py = sess.run(model.pred_ph,feed_dict={model.x_ph:x}).argmax(axis=1)
+    y,vy = y.argmax(axis=1),vy.argmax(axis=1)
     print('Train acc:',np.mean(py==y))
-    py = sess.run(model.pred_ph,feed_dict={model.x_ph:vx}).argmax(axis=1)
-    print('Val acc:',np.mean(py==vy))
+    print('Val acc:',np.mean(pvy==vy))
 
     #sess.close()
 
 if __name__ == "__main__":
-    main()
+    dataset = 'miniimagenet'
+    metatrain_folder = './data/metatrain'
+    if dataset == 'omniglot':
+        pass
+    elif dataset == 'miniimagenet':
+        class_folders = sorted([os.path.join(metatrain_folder,c) for c in os.listdir(metatrain_folder) if c.startswith('n')])
+    elif dataset == 'mnist':
+        class_folders = sorted([os.path.join(metatrain_folder,c) for c in os.listdir(metatrain_folder) if (c[0] in map(str,range(10)))])
+    
+    # sample classes for N-way classification task
+    class_folders = random.sample(class_folders,FLAGS.num_classes)
+    
+    # TODO: Sample K-shots from the training sets
+    
+    main(class_folders)
 
 

@@ -20,6 +20,7 @@ class MAML:
         self.dim_input = dim_input
         self.dim_output = dim_output
         self.update_lr = FLAGS.update_lr
+        self.target_lr = FLAGS.target_task_lr
         self.meta_lr = tf.placeholder_with_default(FLAGS.meta_lr, ())
         self.test_num_updates = test_num_updates
         
@@ -33,12 +34,19 @@ class MAML:
         self.channels = 3
         self.img_size = int(np.sqrt(self.dim_input/self.channels))
 
+        #self.target_task_iterations = 1
+        self.target_task_iterations = FLAGS.target_task_iterations
+
     def construct_model(self, input_tensors=None, prefix='metatrain_'):
         self.inputa = input_tensors['inputa']
         self.inputb = input_tensors['inputb']
         self.labela = input_tensors['labela']
         self.labelb = input_tensors['labelb']
         
+        self.x_ph = tf.placeholder(tf.float32,shape=[None,self.img_size*self.img_size*self.channels])
+        self.vx_ph = tf.placeholder(tf.float32,shape=[None,self.img_size*self.img_size*self.channels])
+        self.y_ph = tf.placeholder(tf.int32,shape=[None,FLAGS.num_classes])
+
         with tf.variable_scope('model', reuse=None) as training_scope:
             if 'weights' in dir(self):
                 training_scope.reuse_variables()
@@ -69,6 +77,7 @@ class MAML:
                 gradients = dict(zip(weights.keys(), grads))
                 fast_weights = dict(zip(weights.keys(), [weights[key] - self.update_lr*gradients[key] for key in weights.keys()]))
                 output = self.forward(inputb, fast_weights, reuse=True)
+                
                 task_outputbs.append(output)
                 task_lossesb.append(self.loss_func(output, labelb))
 
@@ -101,6 +110,12 @@ class MAML:
             result = tf.map_fn(task_metalearn, elems=(self.inputa, self.inputb, self.labela, self.labelb), dtype=out_dtype, parallel_iterations=FLAGS.meta_batch_size)
             outputas, outputbs, lossesa, lossesb, accuraciesa, accuraciesb = result
 
+        ## OPS FOR PLAIN SGD
+        self.sgd_pred = self.forward_conv(self.x_ph, self.weights, reuse=True)
+        self.sgd_loss = self.loss_func(self.sgd_pred,self.y_ph)
+        self.sgd_step = tf.train.AdamOptimizer(learning_rate=FLAGS.sgd_lr).minimize(self.sgd_loss)
+        ###################
+        
         ## Performance & Optimization
         if 'train' in prefix:
             self.total_loss1 = total_loss1 = tf.reduce_sum(lossesa) / tf.to_float(FLAGS.meta_batch_size)
@@ -124,14 +139,6 @@ class MAML:
             self.metaval_total_accuracy1 = total_accuracy1 = tf.reduce_sum(accuraciesa) / tf.to_float(FLAGS.meta_batch_size)
             self.metaval_total_accuracies2 = total_accuracies2 =[tf.reduce_sum(accuraciesb[j]) / tf.to_float(FLAGS.meta_batch_size) for j in range(num_updates)]
 
-        ## Bypass model -- use placeholder for target task SGD
-        self.x_ph = tf.placeholder(tf.float32,shape=[None,self.img_size*self.img_size*self.channels])
-        self.y_ph = tf.placeholder(tf.int32,shape=[None,])
-        self.pred_ph = self.forward_conv(self.x_ph,self.weights)
-        self.sgd_loss = tf.losses.sparse_softmax_cross_entropy(logits=self.pred_ph,labels=self.y_ph) / float(FLAGS.update_batch_size)
-        self.sgd_step = tf.train.AdamOptimizer(learning_rate=5e-4).minimize(self.sgd_loss)
-        #input(pred_ph.get_shape().as_list(),'??????+++')
-
         ## Summaries
         tf.summary.scalar(prefix+'Pre-update loss', total_loss1)
         tf.summary.scalar(prefix+'Pre-update accuracy', total_accuracy1)
@@ -139,6 +146,21 @@ class MAML:
         for j in range(num_updates):
             tf.summary.scalar(prefix+'Post-update loss, step ' + str(j+1), total_losses2[j])
             tf.summary.scalar(prefix+'Post-update accuracy, step ' + str(j+1), total_accuracies2[j])
+
+    def setup_maml_pred(self):
+        #inp = self.inputa[-1]
+        inp = self.x_ph
+        #lab = self.labela[-1]
+        lab = self.y_ph
+        for _ in range(self.target_task_iterations):
+            task_outputa = self.forward(inp,self.weights,reuse=True)  # only reuse on the first iter
+            loss = self.loss_func(task_outputa,lab)
+            grads = tf.gradients(loss, list(self.weights.values()))
+            gradients = dict(zip(self.weights.keys(), grads))
+            fast_weights = dict(zip(self.weights.keys(), [self.weights[key]-self.target_lr*gradients[key] for key in self.weights.keys()]))
+            self.weights = fast_weights
+        self.maml_pred_x = self.forward(self.x_ph, self.weights, reuse=True)
+        self.maml_pred_vx = self.forward_conv(self.vx_ph, self.weights, reuse=True)
 
     ### Network construction functions (fc networks and conv networks)
     def construct_fc_weights(self):
@@ -176,7 +198,10 @@ class MAML:
         weights['b4'] = tf.Variable(tf.zeros([self.dim_hidden]))
         
         #weights['w5'] = tf.get_variable('w5', [self.dim_hidden*5*5, self.dim_output], initializer=fc_initializer)
-        weights['w5'] = tf.get_variable('w5', [128, self.dim_output], initializer=fc_initializer)
+        
+        #weights['w5'] = tf.get_variable('w5', [128, self.dim_output], initializer=fc_initializer)
+        weights['w5'] = tf.get_variable('w5', [1152, self.dim_output], initializer=fc_initializer)
+        
         weights['b5'] = tf.Variable(tf.zeros([self.dim_output]), name='b5')
         
         return weights
