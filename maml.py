@@ -199,8 +199,8 @@ class MAML:
         
         #weights['w5'] = tf.get_variable('w5', [self.dim_hidden*5*5, self.dim_output], initializer=fc_initializer)
         
-        #weights['w5'] = tf.get_variable('w5', [128, self.dim_output], initializer=fc_initializer)
-        weights['w5'] = tf.get_variable('w5', [1152, self.dim_output], initializer=fc_initializer)
+        weights['w5'] = tf.get_variable('w5', [128, self.dim_output], initializer=fc_initializer)
+        #weights['w5'] = tf.get_variable('w5', [1152, self.dim_output], initializer=fc_initializer)
         
         weights['b5'] = tf.Variable(tf.zeros([self.dim_output]), name='b5')
         

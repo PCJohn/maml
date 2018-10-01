@@ -39,7 +39,7 @@ from tensorflow.python.platform import flags
 FLAGS = flags.FLAGS
 
 ## Dataset/method options
-flags.DEFINE_string('datasource', 'miniimagenet', 'sinusoid or omniglot or miniimagenet')
+flags.DEFINE_string('datasource', 'mnist', 'sinusoid or omniglot or miniimagenet')
 flags.DEFINE_integer('num_classes', 10, 'number of classes used in classification (e.g. 5-way classification).')
 flags.DEFINE_integer('img_size',28,'image size')
 
@@ -254,7 +254,7 @@ def main(class_folders):
     #sess.close()
 
 if __name__ == "__main__":
-    dataset = 'miniimagenet'
+    dataset = 'mnist'
     metatrain_folder = './data/metatrain'
     if dataset == 'omniglot':
         pass
